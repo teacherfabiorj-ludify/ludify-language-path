@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RPL — Language Path (protótipo)</title>
+<style>
+  .app {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --muted:          #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --good:           #0ca30c;
+    --current:        #2a78d6;
+    --current-bg:     #eaf2fc;
+    --locked:         #c3c2b7;
+    --warn-bg:        #fff3e0;
+    --warn-text:      #9a5b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    .app {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted:          #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --good:           #0ca30c;
+      --current:        #3987e5;
+      --current-bg:     #16283f;
+      --locked:         #383835;
+      --warn-bg:        #3a2a10;
+      --warn-text:      #f0b24a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--page); }
+  .app { max-width: 880px; margin: 0 auto; padding: 28px 20px 60px; color: var(--text-primary); }
+  .proto-banner {
+    background: var(--warn-bg); color: var(--warn-text); font-size: 13px; font-weight: 600;
+    padding: 8px 14px; border-radius: 8px; margin-bottom: 20px; text-align:center;
+  }
+  header.top { display:flex; align-items:baseline; justify-content:space-between; margin-bottom: 4px; }
+  h1 { font-size: 20px; margin:0; }
+  .level-tag { font-size: 13px; color: var(--text-secondary); font-weight:600; }
+  .subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 28px; }
+
+  .path-wrap { overflow-x: auto; padding: 10px 4px 18px; margin-bottom: 20px; }
+  .path { display:flex; align-items:center; min-width: max-content; }
+  .node-wrap { display:flex; flex-direction:column; align-items:center; width: 96px; flex-shrink:0; cursor:pointer; }
+  .node-wrap.locked { cursor: default; }
+  .node {
+    width: 44px; height:44px; border-radius: 50%; display:flex; align-items:center; justify-content:center;
+    font-size: 14px; font-weight:700; border: 2px solid var(--border); background: var(--surface-1);
+    color: var(--muted); transition: transform .15s ease;
+  }
+  .node-wrap:not(.locked):hover .node { transform: scale(1.08); }
+  .node.completed { background: var(--good); border-color: var(--good); color:#fff; }
+  .node.current { background: var(--current-bg); border-color: var(--current); color: var(--current); box-shadow: 0 0 0 4px var(--current-bg); }
+  .node.locked { color: var(--locked); }
+  .connector { height:2px; width: 24px; background: var(--gridline); flex-shrink:0; }
+  .connector.done { background: var(--good); }
+  .node-label { font-size: 11px; color: var(--text-secondary); text-align:center; margin-top:6px; line-height:1.2; max-width:90px; }
+  .node-label.locked { color: var(--muted); }
+
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+  .panel h2 { font-size: 17px; margin: 0 0 2px; }
+  .panel .unit-sub { color: var(--text-secondary); font-size: 13px; margin-bottom: 18px; }
+  .field-group { margin-bottom: 16px; }
+  .field-group .label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight:700; margin-bottom:8px; }
+  .check-item { display:flex; align-items:flex-start; gap:8px; padding: 7px 0; font-size: 14px; border-bottom: 1px solid var(--gridline); }
+  .check-item:last-child { border-bottom:none; }
+  .check-item input { margin-top: 3px; }
+  .check-item label { cursor:pointer; }
+
+  .progress-bar-outer { height: 6px; background: var(--gridline); border-radius: 3px; overflow:hidden; margin: 4px 0 18px; }
+  .progress-bar-inner { height:100%; background: var(--current); width:0%; transition: width .2s ease; }
+  .progress-note { font-size: 12px; color: var(--text-secondary); margin-top: -12px; margin-bottom:18px; }
+
+  .btn { border:none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight:600; cursor:pointer; }
+  .btn-primary { background: var(--current); color:#fff; }
+  .btn-primary:disabled { background: var(--locked); cursor:not-allowed; }
+  .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text-primary); margin-left: 8px; }
+
+  .modal-backdrop { position:fixed; inset:0; background: rgba(0,0,0,0.45); display:none; align-items:center; justify-content:center; padding:20px; z-index: 10; }
+  .modal-backdrop.open { display:flex; }
+  .modal { background: var(--surface-1); border-radius: 14px; padding: 26px; max-width: 480px; width:100%; max-height: 86vh; overflow-y:auto; }
+  .modal h3 { margin-top:0; font-size:16px; }
+  .q { margin-bottom: 18px; }
+  .q .qtext { font-size: 14px; font-weight:600; margin-bottom: 8px; }
+  .opt { display:flex; align-items:center; gap:8px; font-size:14px; padding: 5px 0; }
+  .opt input { margin:0; }
+  .modal-actions { display:flex; justify-content:flex-end; margin-top: 8px; }
+
+  .result-box { text-align:center; padding: 10px 0; }
+  .result-score { font-size: 36px; font-weight:800; margin: 6px 0; }
+  .result-pass { color: var(--good); }
+  .result-fail { color: var(--warn-text); }
+  .result-msg { font-size: 14px; color: var(--text-secondary); margin-bottom: 18px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="proto-banner">Protótipo de demonstração — dados de exemplo, sem persistência. Não é o produto final.</div>
+
+  <header class="top">
+    <h1>Your Language Path</h1>
+    <span class="level-tag">Carla · Level B1</span>
+  </header>
+  <p class="subtitle">Manage your own linguistic progress. Study, take the quiz, unlock the next unit.</p>
+
+  <div class="path-wrap">
+    <div class="path" id="path"></div>
+  </div>
+
+  <div class="panel" id="panel"></div>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal" id="modalContent"></div>
+  </div>
+</div>
+
+<script>
+const units = [
+  {n:1, title:"Who we are", grammar:["Information questions","Indirect questions"], vocab:["Describing personality","Personal information"], status:"completed"},
+  {n:2, title:"So much stuff", grammar:["Present perfect (ever/never/for/since)","Present perfect (already/yet)"], vocab:["Describing possessions","Tech features"], status:"completed"},
+  {n:3, title:"Smart moves", grammar:["Articles","Modals for advice"], vocab:["City features","Public transportation"], status:"completed"},
+  {n:4, title:"Think first", grammar:["will/be going to (predictions)","will (sudden decisions)"], vocab:["Opinions & reactions","Decisions and plans"], status:"completed"},
+  {n:5, title:"And then…", grammar:["Simple past","Past continuous x simple past"], vocab:["Losing/finding things","Asking for help"], status:"completed"},
+  {n:6, title:"Impact", grammar:["Quantifiers","Real conditionals (present/future)"], vocab:["Urban problems","Adverbs of manner"], status:"current"},
+  {n:7, title:"Entertain us", grammar:["used to","Comparisons: (not) as…as"], vocab:["Music","TV shows and movies"], status:"locked"},
+  {n:8, title:"Getting there", grammar:["Present perfect continuous","Perfect x perfect continuous"], vocab:["Experiences","Progress"], status:"locked"},
+  {n:9, title:"Make it work", grammar:["Necessity modals","Prohibition/permission"], vocab:["College subjects","Employment"], status:"locked"},
+  {n:10, title:"Why we buy", grammar:["Simple present passive","Simple past passive"], vocab:["Materials","Production"], status:"locked"},
+  {n:11, title:"Pushing yourself", grammar:["Phrasal verbs","Unreal conditionals"], vocab:["Succeeding","Risks"], status:"locked"},
+  {n:12, title:"Life's little lessons", grammar:["Indefinite pronouns","Reported speech"], vocab:["Accidents","Extremes"], status:"locked"},
+];
+
+const quiz = [
+  {q:"If the city ___ (build) more parks, people ___ (feel) happier.", opts:["builds / will feel","will build / feels","build / feel","built / would feel"], correct:0},
+  {q:"Choose the sentence with a correct quantifier:", opts:["There is much cars downtown.","There are too many cars downtown.","There are much cars downtown.","There is too many car downtown."], correct:1},
+  {q:"The traffic problem is getting worse ___.", opts:["quick","quickness","quickly","quicker"], correct:2},
+  {q:"Which word describes too many cars causing delays?", opts:["Congestion","Pollution","Overcrowding","Noise"], correct:0},
+  {q:"If we don't act now, pollution ___ (get) worse.", opts:["gets","will get","got","would get"], correct:1},
+];
+
+let checked = {};
+
+function render() {
+  renderPath();
+  renderPanel();
+}
+
+function renderPath() {
+  const el = document.getElementById('path');
+  el.innerHTML = '';
+  units.forEach((u, i) => {
+    if (i > 0) {
+      const prevDone = units[i-1].status === 'completed';
+      const c = document.createElement('div');
+      c.className = 'connector' + (prevDone ? ' done' : '');
+      el.appendChild(c);
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'node-wrap' + (u.status === 'locked' ? ' locked' : '');
+    const node = document.createElement('div');
+    node.className = 'node ' + u.status;
+    node.textContent = u.status === 'completed' ? '✓' : u.n;
+    wrap.appendChild(node);
+    const label = document.createElement('div');
+    label.className = 'node-label' + (u.status === 'locked' ? ' locked' : '');
+    label.textContent = 'Unit ' + u.n;
+    wrap.appendChild(label);
+    if (u.status !== 'locked') {
+      wrap.onclick = () => { selectedUnit = u.n; renderPanel(); };
+    }
+    el.appendChild(wrap);
+  });
+}
+
+let selectedUnit = 6;
+
+function renderPanel() {
+  const u = units.find(x => x.n === selectedUnit);
+  const panel = document.getElementById('panel');
+  const isCurrent = u.status === 'current';
+  const checkedCount = (u.grammar.length + u.vocab.length) > 0
+    ? [...u.grammar, ...u.vocab].filter(t => checked[u.n + '|' + t]).length : 0;
+  const total = u.grammar.length + u.vocab.length;
+  const pct = total ? Math.round((checkedCount/total)*100) : 0;
+
+  panel.innerHTML = `
+    <h2>Unit ${u.n} — ${u.title}</h2>
+    <div class="unit-sub">${u.status === 'completed' ? 'Completed ✓' : u.status === 'current' ? 'In progress — your current Unit Focus' : 'Locked'}</div>
+    ${isCurrent ? `
+      <div class="field-group">
+        <div class="label">Self-check — I've studied this</div>
+        ${[...u.grammar, ...u.vocab].map(t => `
+          <div class="check-item">
+            <input type="checkbox" id="chk-${t}" ${checked[u.n+'|'+t] ? 'checked' : ''} onchange="toggleCheck(${u.n}, '${t.replace(/'/g,"\\'")}')">
+            <label for="chk-${t}">${t}</label>
+          </div>
+        `).join('')}
+      </div>
+      <div class="progress-bar-outer"><div class="progress-bar-inner" style="width:${pct}%"></div></div>
+      <div class="progress-note">${checkedCount}/${total} self-checked — the quiz is available anytime, this is just for your own sense of readiness.</div>
+      <button class="btn btn-primary" onclick="openQuiz()">Take the Unlock Quiz</button>
+    ` : `
+      <div class="field-group">
+        <div class="label">Grammar</div>
+        <div class="check-item">${u.grammar.join(' · ')}</div>
+      </div>
+      <div class="field-group">
+        <div class="label">Vocabulary</div>
+        <div class="check-item">${u.vocab.join(' · ')}</div>
+      </div>
+    `}
+  `;
+}
+
+function toggleCheck(n, t) {
+  const key = n + '|' + t;
+  checked[key] = !checked[key];
+  renderPanel();
+}
+
+function openQuiz() {
+  const backdrop = document.getElementById('modalBackdrop');
+  const modal = document.getElementById('modalContent');
+  modal.innerHTML = `
+    <h3>Unlock Quiz — Unit 6: Impact</h3>
+    <form id="quizForm">
+      ${quiz.map((item, i) => `
+        <div class="q">
+          <div class="qtext">${i+1}. ${item.q}</div>
+          ${item.opts.map((opt, j) => `
+            <div class="opt">
+              <input type="radio" name="q${i}" id="q${i}o${j}" value="${j}">
+              <label for="q${i}o${j}">${opt}</label>
+            </div>
+          `).join('')}
+        </div>
+      `).join('')}
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Submit</button>
+      </div>
+    </form>
+  `;
+  document.getElementById('quizForm').onsubmit = submitQuiz;
+  backdrop.classList.add('open');
+}
+
+function submitQuiz(e) {
+  e.preventDefault();
+  let correct = 0;
+  quiz.forEach((item, i) => {
+    const sel = document.querySelector(`input[name="q${i}"]:checked`);
+    if (sel && parseInt(sel.value) === item.correct) correct++;
+  });
+  const pct = Math.round((correct / quiz.length) * 100);
+  const passed = pct >= 70;
+  const modal = document.getElementById('modalContent');
+  modal.innerHTML = `
+    <div class="result-box">
+      <div class="unit-sub">Your result</div>
+      <div class="result-score ${passed ? 'result-pass' : 'result-fail'}">${pct}%</div>
+      <div class="result-msg">${passed
+        ? "70%+ — Unit 6 unlocked Unit 7! Your next RPG session will already reflect this as your new Unit Focus."
+        : "Below 70% — no problem. Stay on Unit 6 for now, review the topics, and take the quiz again whenever you feel ready. There's no limit on attempts."}</div>
+      <button class="btn btn-primary" onclick="closeModal(${passed})">Done</button>
+    </div>
+  `;
+}
+
+function closeModal(unlocked) {
+  document.getElementById('modalBackdrop').classList.remove('open');
+  if (unlocked) {
+    units[5].status = 'completed';
+    units[6].status = 'current';
+    selectedUnit = 7;
+    render();
+  }
+}
+
+render();
+</script>
+</body>
+</html>
