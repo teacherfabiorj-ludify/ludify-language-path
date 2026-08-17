@@ -3,9 +3,7 @@
 //
 // This file is the ONE source of truth for the whole Core Rulebook.
 // Every chapter lives here, as data + layout, in the order it appears in
-// the book (CH1, CH2, ... CH8) — even chapters not written yet get a
-// placeholder entry in the roadmap table so the manuscript always shows
-// the full planned shape of the book.
+// the book (CH1, CH2, ... Appendix A).
 //
 // To add or revise a chapter: edit this file, then run `node build.js`.
 // It always regenerates the ENTIRE book from scratch into one docx —
@@ -19,7 +17,7 @@
 const {
   Document, Packer, Paragraph, TextRun, AlignmentType,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak,
-  ImageRun,
+  ImageRun, Footer, PageNumber,
 } = require("docx");
 const { readFileSync } = require("fs");
 const sizeOf = (() => {
@@ -42,6 +40,7 @@ const CRIT = "D03B3B";
 const INK = "0B0B0B";
 const INK_SECONDARY = "52514E";
 const MUTED = "898781";
+const BRAND = "D2691E"; // laranja da marca — só para "Ludify RPL"
 const BOX_BG = "F2F2F0";
 const ZEBRA = "F7F7F5";
 const WHITE = "FFFFFF";
@@ -90,10 +89,83 @@ function sectionHeading(text) {
   });
 }
 
+
+// ---------------------------------------------------------------------------
+// GAME TERMS — every named Focus, Move, Signature Move, Boon and resource gets
+// picked out of running prose in accent bold, so a reader can tell "you Parley"
+// (a Move) from "you parley" (a verb) without having to guess from context.
+// Matching is case-sensitive and word-bounded; longest terms first so that
+// "Read the Room" wins over "Read the Scene" and neither is cut in half.
+// ---------------------------------------------------------------------------
+const GAME_TERMS = [
+  // Signature Moves
+  "Nothing Gets Past Me", "Everyone Has a Price", "Speak for the Table",
+  "Angles and Openings", "Already Knew That", "I Planned for This",
+  "Nothing Slips By", "One Step Ahead", "Shield the Line", "Hold the Door",
+  "Read the Room", "Follow Me",
+  // The six core Moves
+  "Act Under Pressure", "Persuade or Manipulate", "Help or Interfere",
+  "Read the Scene", "Face Danger", "Parley",
+  // System nouns
+  "Growth Moment", "Growth Level", "Growth Ledger", "Language Focus",
+  "Language Point", "Spotlight Token", "Signature Move", "Homework Bonus",
+  "Session Zero", "Cross-Training", "Focus Shift", "Legacy Boon",
+  // The four Archetypes
+  "Vanguard", "Diplomat", "Strategist", "Scout",
+  // The four Focuses
+  "Courage", "Empathy", "Instinct", "Wit",
+  // What you carry, and how far away it is
+  "Within reach", "Out of sight", "Far away", "Nearby", "Boon", "Kit", "Pack",
+];
+
+const TERM_RE = new RegExp(
+  "\\b(" + GAME_TERMS
+    .slice()
+    .sort((a, b) => b.length - a.length)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|") + ")(s\\b|\\b)",
+  "g"
+);
+
+// One pass finds both the brand name and every game term, so a term can never
+// be swallowed by the brand match or vice versa.
+const MARK_RE = new RegExp(
+  "(Ludify RPL)|\\b(" + GAME_TERMS
+    .slice()
+    .sort((a, b) => b.length - a.length)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|") + ")(s\\b|\\b)",
+  "g"
+);
+
+// Split a string into TextRuns: brand name in brand orange, game terms in
+// accent blue, everything else untouched.
+function markTerms(text, base = {}) {
+  if (!text) return [new TextRun({ text: text || "", ...base })];
+  const runs = [];
+  let last = 0;
+  let m;
+  MARK_RE.lastIndex = 0;
+  while ((m = MARK_RE.exec(text)) !== null) {
+    if (m.index > last) {
+      runs.push(new TextRun({ text: text.slice(last, m.index), ...base }));
+    }
+    const isBrand = m[1] !== undefined;
+    runs.push(new TextRun({
+      text: m[0], ...base, bold: true, color: isBrand ? BRAND : ACCENT,
+    }));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) {
+    runs.push(new TextRun({ text: text.slice(last), ...base }));
+  }
+  return runs.length ? runs : [new TextRun({ text, ...base })];
+}
+
 function bodyPara(text, opts = {}) {
   return new Paragraph({
     spacing: { after: opts.after ?? 160 },
-    children: [ new TextRun({ text, color: INK, size: 22, italics: opts.italics || false }) ],
+    children: markTerms(text, { color: INK, size: 22, italics: opts.italics || false }),
   });
 }
 
@@ -117,7 +189,7 @@ function flavorQuote(lines) {
             margins: { top: 40, bottom: 40, left: 240, right: 120 },
             children: arr.map((text, i) => new Paragraph({
               spacing: { after: i === arr.length - 1 ? 0 : 100 },
-              children: [ new TextRun({ text, italics: true, color: INK_SECONDARY, size: 22 }) ],
+              children: markTerms(text, { italics: true, color: INK_SECONDARY, size: 22 }),
             })),
           }),
         ],
@@ -126,7 +198,14 @@ function flavorQuote(lines) {
   });
 }
 
-function calloutBox(label, text, color = GOOD) {
+// Callout colour is decided by FUNCTION, never by taste:
+//   example  (green)  — a concrete case showing the rule in motion
+//   clarify  (blue)   — why a rule works this way, or a finer point
+//   warn     (amber)  — a limit, a trap, or something easy to get wrong
+const BOX_KINDS = { example: GOOD, clarify: ACCENT, warn: WARN };
+
+function calloutBox(label, text, kind = "clarify") {
+  const color = BOX_KINDS[kind] || kind;
   return new Table({
     width: { size: 10080, type: WidthType.DXA },
     columnWidths: [10080],
@@ -150,7 +229,7 @@ function calloutBox(label, text, color = GOOD) {
                 spacing: { after: 60 },
                 children: [ new TextRun({ text: label.toUpperCase(), bold: true, color, size: 18, characterSpacing: 15 }) ],
               }),
-              new Paragraph({ children: [ new TextRun({ text, size: 20, color: INK }) ] }),
+              new Paragraph({ children: markTerms(text, { size: 20, color: INK }) }),
             ],
           }),
         ],
@@ -209,7 +288,9 @@ function threeColTable(headers, rows, widths) {
       width: { size: widths[i], type: WidthType.DXA },
       shading: { type: ShadingType.CLEAR, color: "auto", fill: idx % 2 ? ZEBRA : WHITE },
       margins: { top: 80, bottom: 80, left: 120, right: 120 },
-      children: [ new Paragraph({ children: [ new TextRun({ text: cell, size: 19, color: i === 0 ? INK : INK_SECONDARY, bold: i === 0 }) ] }) ],
+      children: [ new Paragraph({ children: i === 0
+        ? [ new TextRun({ text: cell, size: 19, color: INK, bold: true }) ]
+        : markTerms(cell, { size: 19, color: INK_SECONDARY }) }) ],
     })),
   }));
   return new Table({
@@ -227,23 +308,48 @@ function threeColTable(headers, rows, widths) {
   });
 }
 
+// A thin accent rule across the foot of every page, with the page number in
+// accent bold sitting just under its right-hand end.
+function pageFooter() {
+  return new Footer({
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        spacing: { before: 120 },
+        border: {
+          top: { style: BorderStyle.SINGLE, size: 6, color: ACCENT, space: 6 },
+        },
+        children: [
+          new TextRun({ children: [PageNumber.CURRENT], bold: true, color: ACCENT, size: 20 }),
+        ],
+      }),
+    ],
+  });
+}
+
 // ---------------------------------------------------------------------------
-// COVER NOTE — draft status banner (not a real book page, just orientation
-// for whoever opens the file while it's still being written)
+// TITLE PAGE
 // ---------------------------------------------------------------------------
 
-function coverNote() {
+function titlePage() {
   const children = [];
-  children.push(eyebrow(`${GAME_NAME} — Core Rulebook`));
+  children.push(spacer(1400));
   children.push(new Paragraph({
-    spacing: { after: 160 },
-    children: [ new TextRun({ text: "Draft manuscript", bold: true, color: INK, size: 40 }) ],
+    spacing: { after: 80 },
+    children: [ new TextRun({ text: "Ludify RPL", bold: true, color: BRAND, size: 88 }) ],
   }));
-  children.push(bodyPara(
-    "This is a living document — chapters are added and revised in place as they're written, not necessarily in final reading order until the book is complete. Check the roadmap table at the end of Chapter 1 for what's written so far.",
-    { italics: true }
-  ));
-  children.push(spacer(200));
+  children.push(new Paragraph({
+    spacing: { after: 220 },
+    children: [ new TextRun({ text: "Roleplaying Language", color: INK_SECONDARY, size: 30 }) ],
+  }));
+  children.push(new Paragraph({
+    spacing: { after: 40 },
+    children: [ new TextRun({ text: "CORE RULEBOOK", bold: true, color: ACCENT, size: 26, characterSpacing: 60 }) ],
+  }));
+  children.push(spacer(1800));
+  children.push(new Paragraph({
+    children: [ new TextRun({ text: "Ludify — Idiomas com diversão e propósito", color: MUTED, size: 20 }) ],
+  }));
   children.push(pageBreak());
   return children;
 }
@@ -252,19 +358,46 @@ function coverNote() {
 // CHAPTER 1 — Welcome to [Game Name]
 // ---------------------------------------------------------------------------
 
-const bookRoadmap = [
-  ["Ch. 2 — How a Turn Works", "The 2d6 engine, the three outcome bands, one worked example.", "Written"],
-  ["Ch. 3 — Your Character", "Focuses, your Language Focus, reading your own sheet.", "Written"],
-  ["Ch. 4 — Moves", "The six core Moves everyone shares, no matter the world.", "Written"],
-  ["Ch. 5 — Archetypes & Growth", "Four Archetypes, and the twelve-level track your character climbs as you do.", "Written"],
-  ["Ch. 6 — What You Carry", "Your Kit, six Pack slots, Boons, money and distance — all measured in words.", "Written"],
-  ["Ch. 7 — Making a Character", "Ana builds hers from scratch, one decision at a time.", "Written"],
-  ["Ch. 8 — Language Points & Spotlight Tokens", "How you earn them, how you spend them.", "Written"],
-  ["Ch. 9 — The Worlds You Can Play In", "Six settings this same engine runs, at a glance.", "Written"],
-  ["Ch. 10 — Table Etiquette", "The house rules that keep this a safe place to make mistakes.", "Written"],
-  ["Ch. 11 — Your Responsibilities", "Homework, punctuality, showing up ready.", "Written"],
-  ["Ch. 12 — Session Zero Checklist", "What to align before your very first adventure.", "Written"],
+// Contents. The page column is filled by a two-pass build: the book is
+// generated once, the real first page of every chapter is read back out of the
+// PDF, and those numbers are written in here. Change a chapter and the numbers
+// have to be re-read — see PAGES below.
+const PAGES = {
+  "Ch. 1": "2",
+  "Ch. 2": "4",
+  "Ch. 3": "6",
+  "Ch. 4": "9",
+  "Ch. 5": "12",
+  "Ch. 6": "21",
+  "Ch. 7": "25",
+  "Ch. 8": "28",
+  "Ch. 9": "30",
+  "Ch. 10": "32",
+  "Ch. 11": "34",
+  "Ch. 12": "35",
+  "Appendix A": "36",
+};
+
+const contentsRows = [
+  ["Ch. 1 — Welcome", "What this game is, and how a table with mixed English levels plays together."],
+  ["Ch. 2 — How a Turn Works", "The 2d6 engine, the three outcome bands, one worked example."],
+  ["Ch. 3 — Your Character", "Focuses, your Language Focus, and how to read your own sheet."],
+  ["Ch. 4 — Moves", "The six core Moves everyone shares, no matter the world."],
+  ["Ch. 5 — Archetypes & Growth", "Four Archetypes, and the twelve-level track your character climbs as you do."],
+  ["Ch. 6 — What You Carry", "Your Kit, six Pack slots, Boons, money and distance — all measured in words."],
+  ["Ch. 7 — Making a Character", "Ana builds hers from scratch, one decision at a time."],
+  ["Ch. 8 — Language Points & Spotlight Tokens", "How you earn them, how you spend them."],
+  ["Ch. 9 — The Worlds You Can Play In", "Six settings this same engine runs, at a glance."],
+  ["Ch. 10 — Table Etiquette", "The four house rules that keep this a safe place to make mistakes."],
+  ["Ch. 11 — Your Responsibilities", "Homework, punctuality, showing up ready."],
+  ["Ch. 12 — Session Zero Checklist", "What to agree on before your very first adventure."],
+  ["Appendix A — As Regras em Português", "The core mechanics, summarised in Portuguese, for players still starting out."],
 ];
+
+const bookContents = contentsRows.map(([title, blurb]) => {
+  const key = title.split(" — ")[0];
+  return [title, blurb, String(PAGES[key] ?? "—")];
+});
 
 function chapter1() {
   const children = [];
@@ -296,21 +429,20 @@ function chapter1() {
     `Tables in ${GAME_NAME} mix students at different levels — someone just starting out might be playing right next to someone who's nearly fluent. That's by design, not a compromise. The game never grades you against the other players at your table. Instead, each of you carries a personal language target into every session — your Language Focus, covered fully in Chapter 3 — and your GM builds moments in the spotlight around it. The story is shared. The language work is yours.`
   ));
 
-  children.push(sectionHeading("What You'll Find in This Book"));
-  children.push(bodyPara(
-    `Here's the shape of the whole Core Rulebook. Chapters marked “Written” are finished; the rest are on the way.`,
-    { after: 120 }
-  ));
+  children.push(sectionHeading("Contents"));
   children.push(threeColTable(
-    ["CHAPTER", "WHAT'S INSIDE", "STATUS"],
-    bookRoadmap,
-    [3400, 4680, 2000]
+    ["CHAPTER", "WHAT'S INSIDE", "PAGE"],
+    bookContents,
+    [3600, 5280, 1200]
   ));
 
   children.push(spacer(180));
   children.push(sectionHeading("Before You Play"));
   children.push(bodyPara(
     `This game runs on trying, not on being right — more on exactly what that means in Chapter 10. Your actual starting point isn't Chapter 2, though: it's the Session Zero Checklist at the very end of this book (Chapter 12), where your table aligns on tone, expectations, and how everyone wants to play before the first adventure begins.`
+  ));
+  children.push(bodyPara(
+    `And if the English in these chapters is still ahead of you, turn to Appendix A at the back. Two pages, in Portuguese, covering every rule you need to play your first session. Use it for as long as you need it — and know that the day you stop needing it is one of the things this course is for.`
   ));
 
   return children;
@@ -356,7 +488,7 @@ function chapter2() {
   children.push(calloutBox(
     "In Practice",
     `Same dice, same math, for every player at the table — the beginner and the near-fluent student roll identically. Your English level was never meant to be “character power”; only your Focus rating changes what number you add.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(sectionHeading("The Three Outcome Bands"));
@@ -459,7 +591,7 @@ function chapter3() {
   children.push(calloutBox(
     "In Practice",
     `This is also what keeps every Archetype fair against every other, no matter which world you're playing in — a Warrior in the Fantasy setting and a Netrunner in the Cyberpunk setting both build from the same four numbers. Chapter 5 suggests a starting array for each Archetype, but the choice of how you split your own numbers is always yours.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(sectionHeading("Your Language Focus"));
@@ -472,27 +604,33 @@ function chapter3() {
   children.push(calloutBox(
     "Example",
     `Language Focus: real conditionals, present/future. Card note: “if / when clauses — se você fizer algo, algo vai acontecer (condição).” Everything else about the scene — what the GM says, what your character says back — stays in English.`,
-    GOOD
+    "example"
   ));
 
+  children.push(spacer(200));
   children.push(sectionHeading("Reading Your Sheet"));
   children.push(bodyPara(
-    `Here's every section of your character sheet, and what lives in each one.`,
-    { after: 100 }
+    `Everything this chapter has described lives in one place. Here is a real sheet — Ana's, at the moment she finished making it — with every block numbered. The table underneath says what goes in each one, who fills it in, and how often it changes.`,
+    { after: 60 }
   ));
+  children.push(...figure("assets/sheet_annotated.png", {
+    caption: "Ana's sheet at Session Zero. Grey fields are filled in by your GM; yellow fields are yours.",
+  }));
   children.push(threeColTable(
-    ["SECTION", "WHAT'S THERE", "CHANGES"],
+    ["ON THE SHEET", "WHAT GOES THERE", "HOW OFTEN IT CHANGES"],
     [
-      ["Identity", "Your name, your Setting, your Archetype.", "Set once, at creation."],
-      ["Focuses", "Courage, Empathy, Wit, Instinct — each from −1 to +2.", "Set once, at creation."],
-      ["Moves", "The six base Moves everyone has, plus 1–2 Signature Moves from your Archetype.", "Signature Moves unlock at creation; the six base Moves never change."],
-      ["Language Focus", "This week's grammar or vocabulary target, pulled from your course.", "Updated as you progress through your course."],
-      ["Resources", "Spotlight Tokens and Language Points (Chapter 8).", "Refill at the start of every session."],
-      ["Consequence", "A simple track for setbacks your character picks up during play.", "Changes scene to scene."],
-      ["Progress", "Your Homework Bonus checkbox for the week.", "Reset every session."],
-      ["Bio", "Two or three lines about who your character is.", "Whenever you want to add to it."],
+      ["1 — Who you are", "Your name, the Setting your table is playing in, and your Archetype (Chapter 5). Your character's name is the only part you choose here.", "Once, when you make the character."],
+      ["2 — Growth Level", "How far along the twelve-level track you are (Chapter 5). It is copied from your Growth Ledger, which your GM keeps — never the other way round.", "Once every six units of your course."],
+      ["3 — Focuses", "Courage, Empathy, Wit and Instinct, holding your +2, +1, +0 and −1 in the order you chose.", "Almost never. Only a Focus Shift moves them, and nothing ever raises them."],
+      ["4 — Language Focus", "The grammar point or vocabulary set you are working on right now, and the Evolve unit it came from.", "Every time you finish a unit. Your GM writes it."],
+      ["5 — Signature Move", "The Move that comes with your Archetype, at whatever tier your Growth Level has reached.", "At Levels 3, 7 and 12."],
+      ["6 — Your Moves", "The same six Moves every player has, and which Focus each one uses.", "Never. These six are the whole game."],
+      ["7 — This session", "Spotlight Tokens and Language Points (Chapter 8).", "Every session. They reset, and they never bank forward."],
+      ["8 — Kit and Pack", "Your Kit is the four or five things your Archetype always carries. Your Pack is six slots for everything you pick up (Chapter 6).", "Kit almost never. Pack whenever you take or drop something."],
+      ["9 — Boons", "What you earned at each Growth Moment. Your GM writes these; you never add one yourself.", "Once every six units, and only sometimes."],
+      ["10 — Money and distance", "Your coins, handfuls and bags, and the four distances this game uses instead of metres (Chapter 6).", "Money, whenever you spend or earn. The four distances, never."],
     ],
-    [2200, 5480, 2400]
+    [2400, 5080, 2600]
   ));
 
   children.push(spacer(180));
@@ -773,7 +911,7 @@ function chapterResources() {
   children.push(calloutBox(
     "In Practice",
     `A Spotlight Token doesn't change any dice roll — it changes how much time and attention the table gives you. It's there to make room for more English, not to buy you a mechanical edge. If a Move happens during your extended turn, you still roll for it normally.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(sectionHeading("Language Points"));
@@ -787,7 +925,7 @@ function chapterResources() {
   children.push(calloutBox(
     "Example",
     `Diego's Language Focus this week is commenting adverbs and the future perfect. Earlier in the session he used one flawlessly while warning the party about a trap — "Fortunately, I will have checked the mechanism before anyone touches it" — and banked a Language Point on the spot. Two scenes later he rolls a Persuade or Manipulate check and lands a 5. He spends the point, rerolls, and gets an 8 instead — a Mixed Result instead of a flat Miss.`,
-    GOOD
+    "example"
   ));
 
   children.push(sectionHeading("Two Resources, Side by Side"));
@@ -866,7 +1004,7 @@ function chapterEtiquette() {
   children.push(calloutBox(
     "In Practice",
     `You: "If you letting us in, we show the papers." GM, narrating straight back: "Oren studies you a moment longer, weighing whether he'll let you in once you can prove it..." Same idea, correct grammar, zero interruption. You keep playing — the correction already did its job.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(sectionHeading("One Scene, One Voice"));
@@ -930,7 +1068,7 @@ function chapterResponsibilities() {
   children.push(calloutBox(
     "Example",
     `Ana finished her homework the night before. Mid-session, she rolls a 8 on Parley — 2d6 came up 7, plus her Empathy of +1 — a Mixed Result, but she wanted more. She checks her Homework Bonus box, adds +1, and the total becomes 9... still short. She only gets one shot at it per session, so she banks the lesson for next time: save it for a roll that's already close to 10+.`,
-    GOOD
+    "example"
   ));
 
   children.push(sectionHeading("Punctuality"));
@@ -946,7 +1084,7 @@ function chapterResponsibilities() {
   children.push(calloutBox(
     "In Practice",
     `One habit covers all of it: reread your character sheet and the last line of the previous session's recap right before you sit down. That's the whole prep — nothing more is required.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(spacer(180));
@@ -987,7 +1125,7 @@ function chapterSessionZero() {
     [
       ["Setting & Tone", "Which of the worlds in Chapter 9 is the table playing, and which campaign shape — Long Haul, Chronicle, or Anthology (Chapter 5)? What's in bounds, and what's off the table content-wise?"],
       ["Characters", "Everyone builds their sheet together — assign your Focus array (Chapter 3), then pick an Archetype and Signature Move (Chapter 5) and read the Kit that comes with it (Chapter 6). Chapter 7 walks through one from start to finish."],
-      ["Growth Levels", "Each player states their current Growth Level from their Growth Ledger, and the table agrees on a Starting Level (Chapter 5). Levels may differ around the table — that's normal and changes nothing about the dice."],
+      ["Growth Levels", "A brand-new table starts everyone at Level 1, whatever their English level (Chapter 5). A table taking in a player who has played here before reads their Growth Ledger. Levels may differ around the table — that's normal and changes nothing about the dice."],
       ["Language Focus", "Your GM assigns each player's starting Language Focus, pulled from whatever you're covering in regular class."],
       ["Schedule & Attendance", "Confirm the session day and time, and revisit the Punctuality expectation (Chapter 11)."],
       ["Table Etiquette Recap", "A quick read-through of the four rules in Chapter 10, out loud, together."],
@@ -1093,26 +1231,25 @@ function archetypeBlock(a) {
     a.tiers,
     [1700, 2200, 6180]
   ));
-  parts.push(spacer(220));
   return parts;
 }
 
 // The full career ladder. 12 Growth Levels, 11 Growth Moments between them,
 // plus a Capstone for finishing the last half-book of the Evolve track.
 const growthLadder = [
-  ["Level 1", "— you start here, in Evolve 1A", "Archetype, Focus array, Signature Move at Tier 1."],
-  ["Level 2", "Evolve 1A", "A Boon."],
-  ["Level 3", "Evolve 1B", "Signature Move steps up to Tier 2."],
-  ["Level 4", "Evolve 2A", "A Boon."],
-  ["Level 5", "Evolve 2B", "Cross-Training."],
-  ["Level 6", "Evolve 3A", "A Boon."],
-  ["Level 7", "Evolve 3B", "Signature Move steps up to Tier 3."],
-  ["Level 8", "Evolve 4A", "A Boon."],
-  ["Level 9", "Evolve 4B", "A Focus Shift."],
-  ["Level 10", "Evolve 5A", "A Boon."],
-  ["Level 11", "Evolve 5B", "Cross-Training."],
-  ["Level 12", "Evolve 6A", "Signature Move steps up to Tier 4."],
-  ["Capstone", "Evolve 6B", "A Legacy Boon — and your character's story closes, or hands itself to someone new."],
+  ["Level 1", "the day you sit down", "Archetype, Focus array, Signature Move at Tier 1."],
+  ["Level 2", "6 units", "A Boon."],
+  ["Level 3", "12 units", "Signature Move steps up to Tier 2."],
+  ["Level 4", "18 units", "A Boon."],
+  ["Level 5", "24 units", "Cross-Training."],
+  ["Level 6", "30 units", "A Boon."],
+  ["Level 7", "36 units", "Signature Move steps up to Tier 3."],
+  ["Level 8", "42 units", "A Boon."],
+  ["Level 9", "48 units", "A Focus Shift."],
+  ["Level 10", "54 units", "A Boon."],
+  ["Level 11", "60 units", "Cross-Training."],
+  ["Level 12", "66 units", "Signature Move steps up to Tier 4."],
+  ["Capstone", "72 units", "A Legacy Boon — and your character's story closes, or hands itself to someone new."],
 ];
 
 const growthKinds = [
@@ -1124,6 +1261,7 @@ const growthKinds = [
 ];
 
 const guardrails = [
+  ["You start at Level 1. Everybody does.", "Your Growth Level does not come from how good your English already is. A student who joins at a high level and a student who joins from zero both sit down at Level 1, with no Boons. What you knew before you got here is not something this table gets to reward — only what you do after."],
   ["Focus numbers never go up.", "The only thing that ever happens to your array is a Focus Shift, which moves a number without creating one. A Level 12 character and a Level 1 character roll against exactly the same odds. This is the promise from Chapter 2, kept all the way to the end of the track."],
   ["You only ever have one Archetype Signature Move.", "Tiers replace each other. Your sheet at Level 12 is not four Moves deep — it is one Move, four times sharper."],
   ["Cross-Training stays at Tier 1, twice, forever.", "Borrowed Moves give you range, not depth. Two of them, from two different Archetypes, and neither one ever upgrades."],
@@ -1171,7 +1309,7 @@ function chapterArchetypes() {
   children.push(pageBreak());
   children.push(sectionHeading("Growth: Leveling Up With Your English"));
   children.push(bodyPara(
-    `${GAME_NAME} ties character growth to something almost no other game can reach: your actual progress in your actual coursework. Finish six units of your Evolve Digital track, pass the test that closes them, and your character hits a Growth Moment — no matter how many sessions that took, and completely independent of anything that happened at the table. Studying is what makes your character grow. Nothing else does.`
+    `${GAME_NAME} ties character growth to something almost no other game can reach: the work you do on your own English. Finish six units of your course, pass the test that closes them, and your character hits a Growth Moment — no matter how many sessions that took, and no matter what happened at the table. Studying is what makes your character grow. Nothing else does.`
   ));
   children.push(bodyPara(
     `Every Growth Moment also retires your current Language Focus and replaces it with a new one, drawn by your GM from the material you are moving into. That part is automatic — it is not one of your choices, it is the reason the choices exist.`
@@ -1179,11 +1317,11 @@ function chapterArchetypes() {
 
   children.push(sectionHeading("The Twelve-Level Track"));
   children.push(bodyPara(
-    `The Evolve track runs from 1A to 6B — twelve half-books, six units each. A student who begins at A1 begins at Growth Level 1, and every half-book completed moves them one level up the ladder. Eleven Growth Moments sit between Level 1 and Level 12, and one final Capstone waits at the far end of 6B. If you join the game already past A1, you simply start at the level that matches where you are; nobody plays catch-up.`,
+    `The ladder has twelve rungs. Eleven Growth Moments sit between Level 1 and Level 12, and one last Capstone waits at the top. Every rung costs the same thing: six more units finished.`,
     { after: 100 }
   ));
   children.push(threeColTable(
-    ["LEVEL", "YOU'VE FINISHED", "WHAT YOU GAIN"],
+    ["LEVEL", "UNITS DONE HERE", "WHAT YOU GAIN"],
     growthLadder,
     [1500, 2800, 5780]
   ));
@@ -1192,10 +1330,27 @@ function chapterArchetypes() {
   children.push(calloutBox(
     "In Practice",
     `Notice what the ladder alternates. Six of the eleven Growth Moments give you fiction — a Boon, then another Boon — and only five touch the rules at all. That rhythm is on purpose: it keeps growth constant without letting mechanics pile up.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(pageBreak());
+  children.push(sectionHeading("Everyone Starts at Level 1"));
+  children.push(bodyPara(
+    `Read the second column of that table again. It says units done here — not which book you are in, and not how good your English is.`
+  ));
+  children.push(bodyPara(
+    `Four people can sit down at the same table on the same day with four different English levels. One is on their first unit ever; one is halfway through the third book; one is nearly finished. All four start at Growth Level 1, with no Boons, with their Signature Move at Tier 1. What you already knew when you walked in is not something this game pays you for.`
+  ));
+  children.push(bodyPara(
+    `That is not a way of holding strong students back. It is what makes a Boon mean something. A Boon is proof of work you did here, at this table, over months — and a reward you were handed for a test you took somewhere else, years ago, would not be proof of anything.`
+  ));
+  children.push(calloutBox(
+    "And when the books run out",
+    `Six units is six units, whatever you are studying. A student who joins at a high level will finish the last Evolve book long before they reach Level 12 — and then they simply keep counting, six units at a time, through whatever course comes next. The ladder belongs to the game, not to any one book.`,
+    "clarify"
+  ));
+
+  children.push(spacer(240));
   children.push(sectionHeading("The Five Kinds of Growth"));
   children.push(bodyPara(
     `Every rung on the ladder hands you one of these five things, and nothing else.`,
@@ -1223,14 +1378,14 @@ function chapterArchetypes() {
   children.push(calloutBox(
     "The Short Version",
     `A Level 12 character has one very sharp Signature Move, two borrowed ones, a rearranged Focus array, and a pile of history. They still roll 2d6. They still Miss on a 6 or under. Nothing on the ladder was ever aimed at the dice — it was aimed at how many interesting things you can choose to do before you roll them.`,
-    GOOD
+    "clarify"
   ));
 
   children.push(spacer(180));
   children.push(calloutBox(
     "Example",
-    `Ana — the player from Chapter 2's gate scene — is at Growth Level 2 with her Diplomat, Mira. She finishes Evolve 1B and passes the test: Growth Moment. That rung is a Signature Move upgrade, so Read the Room sharpens to Tier 2, and from now on she can ask her GM what an NPC is afraid of instead of what they want. Her Empathy is still +1. It was +1 last month, and it will be +1 at Level 12.`,
-    GOOD
+    `Ana — the player from Chapter 2's gate scene — is at Growth Level 2 with her Diplomat, Mira. She finishes her twelfth unit and passes the test: Growth Moment. That rung is a Signature Move upgrade, so Read the Room sharpens to Tier 2, and from now on she can ask her GM what an NPC is afraid of instead of what they want. Her Empathy is still +1. It was +1 last month, and it will be +1 at Level 12.`,
+    "example"
   ));
 
   // -------------------------------------------------------------------------
@@ -1240,7 +1395,21 @@ function chapterArchetypes() {
     `This is the rule that makes everything else portable, so it is worth stating plainly: Growth Levels are earned by the student, not by the character. They come from your coursework. Your coursework does not reset when a campaign ends, so neither does your level.`
   ));
   children.push(bodyPara(
-    `Keep a Growth Ledger — a card, a page, a note in your Foundry sheet, it does not matter — listing your current Growth Level, which Evolve half-book you are in, every Archetype you have played, and every Boon you have earned. It survives characters. It survives campaigns. It survives switching worlds entirely. When a table starts something new, the Ledger is what you bring to the table.`
+    `This is why the Growth Ledger is not part of your character sheet, and must never be kept there. Your character sheet is temporary: it belongs to one character, in one world, in one campaign, and the day your table starts something new it gets replaced. Your Ledger is permanent. It lists your Growth Level, how many units you have finished here, every Archetype you have played, every character you have played them as, and every Boon you have ever earned.`
+  ));
+
+  children.push(bodyPara(
+    `Your GM keeps the Ledger for the whole table, in one place that is not the character sheets — a shared page, a spreadsheet, a notebook. You should be able to read yours at any time, and you should never be the only copy of it.`
+  ));
+  children.push(calloutBox(
+    "Example",
+    `Ana has been playing for a year. Her table finishes its Fantasy campaign and votes to start again in Cyberpunk. Mira the Diplomat is retired, and Ana builds someone new. The character sheet is blank again — new name, new Kit, new Focus labels. Her Ledger is not: it still reads Growth Level 3, two Boons earned, Archetypes played: Diplomat. She builds her new character at Level 3, with her Signature Move already at Tier 2, and reimagines both Boons for the new world. Nothing she earned went anywhere.`,
+    "example"
+  ));
+  children.push(calloutBox(
+    "The one thing that would break this",
+    `If your Growth Level lived only on your character sheet, retiring that character would delete a year of your work. That is the whole reason for the separation — not bookkeeping neatness, but making sure the table can change worlds as often as it likes without anybody paying for it.`,
+    "warn"
   ));
 
   children.push(sectionHeading("Three Shapes a Campaign Can Take"));
@@ -1261,17 +1430,18 @@ function chapterArchetypes() {
   ));
   children.push(calloutBox(
     "In Practice",
-    `A player at Level 8 who moves from Fantasy to Cyberpunk does not restart. Their sword — a Boon meaning “a weapon nobody argues with” — becomes a corporate ID that nobody questions. Same function, new world. Their Signature Move is still Tier 3, because they still finished Evolve 3B.`,
-    ACCENT
+    `A player at Level 8 who moves from Fantasy to Cyberpunk does not restart. Their sword — a Boon meaning “a weapon nobody argues with” — becomes a corporate ID that nobody questions. Same function, new world. Their Signature Move is still Tier 3, because they still did the forty-two units that earned it.`,
+    "clarify"
   ));
 
   children.push(spacer(180));
+  children.push(pageBreak());
   children.push(sectionHeading("Different Levels at the Same Table"));
   children.push(bodyPara(
-    `Your table will almost certainly hold students at different Evolve levels, which means characters at different Growth Levels sitting side by side. That is fine, and it is fine for the same reason everything else in this book is fine: none of it touches the dice. A Level 10 character has more tools to reach for than a Level 3 character. Neither of them has better odds. The Level 3 player is not behind — they are simply earlier, on exactly the same road.`
+    `On day one, every table is level. Everybody is at Level 1, whatever book they are studying from. What splits the table later is not English — it is time and work. The player who has been here two years is further up the ladder than the player who arrived in March, and that is the whole point of the ladder.`
   ));
   children.push(bodyPara(
-    `A table starting fresh should agree on a Starting Level at Session Zero. Usually that is each player's real Growth Level from their Ledger. A table beginning a brand-new Chronicle together may instead agree to start everyone at Level 1 — that is allowed, as long as everyone does it, and as long as nobody's Ledger is erased. The Ledger keeps counting either way.`
+    `So yes, you will end up with a Level 10 character sitting next to a Level 3 one. That is fine, for the same reason everything else in this book is fine: none of it touches the dice. The Level 10 player has more tools to reach for. Neither player has better odds. The Level 3 player is not behind — they are simply earlier, on exactly the same road.`
   ));
 
   return children;
@@ -1333,7 +1503,7 @@ function chapterGear() {
   children.push(calloutBox(
     "Why it works this way",
     `The player who happens to find the better sword should not roll better than the player who did not. Your dice belong to you and your Focuses, and nothing you can buy, loot or be given is allowed to touch them. That is the same promise the game makes about your English level in Chapter 2, kept one more time.`,
-    ACCENT
+    "clarify"
   ));
 
   // -------------------------------------------------------------------------
@@ -1371,7 +1541,7 @@ function chapterGear() {
   children.push(calloutBox(
     "At the table",
     `“I'll leave the crowbar by the door — we can come back for it. I want the book.” That is a complete turn. Nobody rolled anything, and four people just negotiated in a second language about something they cared about.`,
-    GOOD
+    "example"
   ));
 
   // -------------------------------------------------------------------------
@@ -1419,7 +1589,7 @@ function chapterGear() {
   children.push(calloutBox(
     "Every world, same four steps",
     `Whatever your setting calls its money — gold, credits, scrip, cash, funds — the four steps never change their names. A handful of credits and a bag of scrip work exactly like a handful of gold and a bag of gold. You learn the ladder once and it follows you into every world you ever play in.`,
-    ACCENT
+    "clarify"
   ));
 
   // -------------------------------------------------------------------------
@@ -1471,11 +1641,11 @@ const anaSheet = [
   ["Empathy", "+1"],
   ["Wit", "+0"],
   ["Instinct", "+2"],
-  ["Signature Move", "Read the Room (Tier 2)"],
+  ["Signature Move", "Read the Room (Tier 1)"],
   ["Language Focus", "Past simple — narrating what happened"],
   ["Kit", "A sealed letter · a silver ring · a warm cloak · a small mirror"],
   ["Pack", "Six slots, all empty — she has not been anywhere yet"],
-  ["Growth Level", "3 (currently in Evolve 2A)"],
+  ["Growth Level", "1 — her first day here"],
   ["Resources", "3 Spotlight Tokens · 0 Language Points · Homework Bonus unchecked"],
 ];
 
@@ -1503,7 +1673,7 @@ function chapterAna() {
   children.push(calloutBox(
     "In Practice",
     `If you cannot answer this question, answer a smaller one: name a character from a book, film, or series whose scenes you always look forward to. You are not copying them. You are just finding out what kind of scene you want more of.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(sectionHeading("Step 2 — Pick the Archetype That Matches the Answer"));
@@ -1521,13 +1691,16 @@ function chapterAna() {
   children.push(calloutBox(
     "The Rule Behind This",
     `You always place the same four numbers: +2, +1, +0, and −1. Every player at every table at every level does. Where you put them is the entire choice, and it is the only part of your sheet that will never change on its own.`,
-    GOOD
+    "clarify"
   ));
 
   children.push(pageBreak());
   children.push(sectionHeading("Step 4 — Take Your Signature Move (You Do Not Choose It)"));
   children.push(bodyPara(
-    `Read the Room comes with the Diplomat, free, at Tier 1: before Ana decides what to offer in a Parley, she may ask her GM what the other party actually wants, and get an honest answer. There is nothing to pick here — the Archetype hands it over. Ana is at Growth Level 3, though, because she has already finished Evolve 1A and 1B, so hers is already at Tier 2: she may ask what the other party is afraid of instead. Her next Growth Moment, at the end of Evolve 2A, will be a Boon rather than another upgrade.`
+    `Read the Room comes with the Diplomat, free, at Tier 1: before Ana decides what to offer in a Parley, she may ask her GM what the other party actually wants, and get an honest answer. There is nothing to pick here — the Archetype hands it over.`
+  ));
+  children.push(bodyPara(
+    `Ana is at Growth Level 1, like everyone else at the table on their first day. Her English is stronger than Leo's and weaker than Tiago's, and none of that shows up here. Six units from now she gets her first Boon.`
   ));
 
   children.push(sectionHeading("Step 5 — Your Language Focus Is Assigned, Not Chosen"));
@@ -1542,7 +1715,7 @@ function chapterAna() {
   children.push(calloutBox(
     "In Practice",
     `One true detail beats a full biography, especially in a language you are still building. A sentence you can say confidently in English at the table is worth more than a paragraph you wrote with a dictionary and will never use.`,
-    ACCENT
+    "clarify"
   ));
 
   children.push(sectionHeading("Step 7 — Your Kit Is Already Written"));
@@ -1557,7 +1730,7 @@ function chapterAna() {
   children.push(pageBreak());
   children.push(sectionHeading("Step 8 — Fill In the Rest and Stop"));
   children.push(bodyPara(
-    `Three Spotlight Tokens, zero Language Points, Homework Bonus box empty until she earns it. Growth Level 3 copied over from her Growth Ledger. Done — she is finished before half the table has decided on a name.`,
+    `Three Spotlight Tokens, zero Language Points, Homework Bonus box empty until she earns it. Growth Level 1, and a brand new Growth Ledger with nothing on it yet. Done — she is finished before half the table has decided on a name.`,
     { after: 100 }
   ));
   children.push(threeColTable(
@@ -1566,7 +1739,7 @@ function chapterAna() {
     [3400, 6680]
   ));
 
-  children.push(pageBreak());
+  children.push(spacer(240));
   children.push(sectionHeading("What Ana Did Not Do"));
   children.push(bodyPara(
     `She did not check which Focus the dice favour, because none of them do. She did not read all four Archetypes twice looking for the strongest, because they are not ranked. She did not write a backstory longer than a sentence, and she did not wait for permission to be finished. Two sessions later she was standing in front of a tired gatekeeper named Oren with her Empathy of +1 and a permit she could not produce — and that scene, in Chapter 2, is what all of this was for.`,
@@ -1680,11 +1853,127 @@ function chapterSettings() {
 }
 
 // ---------------------------------------------------------------------------
+// APPENDIX A — THE RULES IN PORTUGUESE
+// The one deliberate exception to the English-only rule of this book. It exists
+// so an A1 student can sit down and play in week one without understanding the
+// chapters yet. Rule NAMES stay in English on purpose — those are what gets
+// said out loud at the table; only the explanation is translated.
+// ---------------------------------------------------------------------------
+
+const ptRoll = [
+  ["Você rola", "2d6 e soma o Focus que aquele Move pedir."],
+  ["10 ou mais", "Strong Hit. Dá certo do jeito que você queria, sem custo."],
+  ["7, 8 ou 9", "Mixed Result. Dá certo, mas tem um preço — o GM diz qual, ou te dá uma escolha difícil."],
+  ["6 ou menos", "Miss. Não dá certo, e o GM responde com alguma coisa que complica a cena."],
+];
+
+const ptFocuses = [
+  ["Courage", "Encarar o perigo de frente. Coragem física, aguentar o tranco."],
+  ["Empathy", "Ler gente. Negociar, pedir, entender o que o outro realmente quer."],
+  ["Wit", "Pensar rápido e com esperteza. Achar o ângulo, resolver o problema."],
+  ["Instinct", "Perceber. Notar o detalhe, reagir antes de raciocinar."],
+];
+
+const ptMoves = [
+  ["Face Danger", "Courage", "Quando você entra no perigo de propósito, para conseguir alguma coisa."],
+  ["Parley", "Empathy", "Quando você faz um pedido direto, oferecendo algo que a outra pessoa quer."],
+  ["Help or Interfere", "Empathy", "Quando você entra para ajudar — ou atrapalhar — a jogada de outro jogador."],
+  ["Persuade or Manipulate", "Wit", "Quando você trabalha alguém: elogio, lógica, meia-verdade bem colocada."],
+  ["Act Under Pressure", "Instinct", "Quando você tem que agir rápido, sem tempo de pensar."],
+  ["Read the Scene", "Instinct", "Quando você para e observa uma pessoa, um lugar ou uma situação antes de agir."],
+];
+
+const ptSheet = [
+  ["Language Focus", "O ponto de gramática que você está estudando esta semana. É só seu. Use bem numa cena e você ganha um Language Point."],
+  ["Language Point", "Ganho quando você acerta o seu Language Focus em cena. Gasta para rolar 2d6 de novo."],
+  ["Spotlight Token", "Compra espaço na cena para você. Zera a cada sessão — não acumula."],
+  ["Kit", "Os 4 ou 5 itens que seu personagem sempre carrega. Vêm do Archetype. Não gasta, não conta."],
+  ["Pack", "Seis espaços para o que você pegar pelo caminho. Cheio, tem que largar algo para pegar outra coisa."],
+  ["Boon", "Recompensa de Growth Moment. Abre porta na história — nunca dá bônus no dado."],
+  ["Growth Level", "Sobe 1 a cada 6 unidades do seu curso terminadas aqui. Todo mundo começa no 1, seja qual for o seu inglês."],
+];
+
+const ptTable = [
+  ["Mistakes Are How We Play", "Ninguém corrige você no meio da cena. O GM devolve a forma certa dentro da fala dele."],
+  ["One Scene, One Voice", "Deixe o colega terminar o momento dele antes de entrar."],
+  ["Yes, And", "Construa em cima do que o outro trouxe. Não derrube a ideia dele."],
+  ["In Character, In English", "Tudo o que você diz como personagem é em inglês. Travou? Descreva por volta, ou pergunte ao GM: how do I say ___?"],
+];
+
+function chapterAppendixPT() {
+  const children = [];
+  children.push(eyebrow("Appendix A"));
+  children.push(chapterTitle("As Regras em Português"));
+
+  children.push(flavorQuote([
+    `This is the only page in the book that is not in English. Use it, and then outgrow it.`,
+  ]));
+  children.push(spacer(140));
+
+  children.push(bodyPara(
+    `Este resumo existe por um motivo só: para você conseguir jogar desde a primeira sessão, mesmo sem dar conta de ler o livro inteiro ainda. Ele cobre a mecânica principal e mais nada — o resto do livro tem coisas que este apêndice não substitui.`
+  ));
+  children.push(bodyPara(
+    `Repare que os nomes das regras continuam em inglês. Isso é de propósito: são esses nomes que vão ser ditos em voz alta na mesa, toda sessão. Você aprende os nomes agora e a explicação depois.`
+  ));
+  children.push(calloutBox(
+    "Uma meta, não um detalhe",
+    `Quando você conseguir ler o livro inteiro em inglês, este apêndice para de ser necessário. Esse dia é uma das conquistas do curso — e vai chegar antes do que você imagina.`,
+    "clarify"
+  ));
+
+  children.push(sectionHeading("Como funciona uma rolagem"));
+  children.push(threeColTable(["QUANDO", "O QUE ACONTECE"], ptRoll, [2600, 7480]));
+
+  children.push(spacer(200));
+  children.push(sectionHeading("Os quatro Focuses"));
+  children.push(bodyPara(
+    `Na criação do personagem você distribui +2, +1, +0 e −1 entre os quatro. Todo mundo recebe exatamente esses quatro números — ninguém é mais forte que ninguém, você só escolhe onde é bom.`,
+    { after: 100 }
+  ));
+  children.push(threeColTable(["FOCUS", "O QUE É"], ptFocuses, [2600, 7480]));
+
+  children.push(pageBreak());
+  children.push(sectionHeading("Os seis Moves"));
+  children.push(bodyPara(
+    `Todo Move usa um Focus. Você rola 2d6 e soma esse Focus.`,
+    { after: 100 }
+  ));
+  children.push(threeColTable(["MOVE", "FOCUS", "QUANDO USAR"], ptMoves, [2900, 1600, 5580]));
+
+  children.push(spacer(200));
+  children.push(sectionHeading("O que tem na sua ficha"));
+  children.push(threeColTable(["CAMPO", "O QUE É"], ptSheet, [2600, 7480]));
+
+  children.push(spacer(200));
+  children.push(sectionHeading("Dinheiro e distância"));
+  children.push(bodyPara(
+    `Dinheiro tem quatro degraus: a coin, a handful (10 coins), a bag (10 handfuls) e a chest (10 bags, e é o máximo que dá para carregar). Preço se fala em degraus — uma espada custa two handfuls. Ninguém faz conta.`
+  ));
+  children.push(bodyPara(
+    `Distância também tem quatro degraus, e o jogo não usa metros: Within reach (dá para tocar), Nearby (mesma sala), Far away (precisa se deslocar) e Out of sight (fora de vista, não dá para agir).`
+  ));
+
+  children.push(pageBreak());
+  children.push(sectionHeading("As quatro regras da mesa"));
+  children.push(threeColTable(["REGRA", "O QUE SIGNIFICA"], ptTable, [3000, 7080]));
+
+  children.push(spacer(220));
+  children.push(calloutBox(
+    "O resto do livro",
+    `Tudo o que não está aqui — Archetypes, a trilha de doze níveis, os settings, o que fazer quando alguém entra na campanha no meio — está em inglês, nos capítulos. Peça ajuda ao seu GM sempre que precisar. Perguntar faz parte do jogo.`,
+    "example"
+  ));
+
+  return children;
+}
+
+// ---------------------------------------------------------------------------
 // ASSEMBLE THE WHOLE BOOK
 // ---------------------------------------------------------------------------
 
 const children = [];
-children.push(...coverNote());
+children.push(...titlePage());
 children.push(...chapter1());
 children.push(pageBreak());
 children.push(...chapter2());
@@ -1708,6 +1997,8 @@ children.push(pageBreak());
 children.push(...chapterResponsibilities());
 children.push(pageBreak());
 children.push(...chapterSessionZero());
+children.push(pageBreak());
+children.push(...chapterAppendixPT());
 
 const doc = new Document({
   sections: [{
@@ -1717,6 +2008,7 @@ const doc = new Document({
         margin: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
       },
     },
+    footers: { default: pageFooter() },
     children,
   }],
 });
